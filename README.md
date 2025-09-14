@@ -102,6 +102,27 @@ annotated_image = sv.BoxAnnotator(color=sv.ColorPalette.ROBOFLOW).annotate(annot
 annotated_image = sv.LabelAnnotator(color=sv.ColorPalette.ROBOFLOW).annotate(annotated_image, detections, labels)
 ```
 
+## Download from Roboflow
+
+If you trained an RF-DETR model on Roboflow and want to download the weights to use locally:
+
+```python
+from rfdetr import RFDETRBase
+
+# Download your trained model from Roboflow
+model = RFDETRBase.download_from_roboflow(
+    workspace="your-workspace",
+    project_id="your-project-id",
+    version="1",
+    api_key="your_api_key"
+)
+
+# Use for local inference
+detections = model.predict("path/to/image.jpg", threshold=0.5)
+```
+
+[Read our download guide for more details](https://rfdetr.roboflow.com/learn/download-from-roboflow/)
+
 ## Predict
 
 You can also use the .predict method to perform inference during local development. The `.predict()` method accepts various input formats, including file paths, PIL images, NumPy arrays, and torch tensors. Please ensure inputs use RGB channel order. For `torch.Tensor` inputs specifically, they must have a shape of `(3, H, W)` with values normalized to the `[0..1)` range. If you don't plan to modify the image or batch size dynamically at runtime, you can also use `.optimize_for_inference()` to get up to 2x end-to-end speedup, depending on platform.

@@ -7,6 +7,7 @@
 
 import json
 import os
+import tempfile
 from collections import defaultdict
 from logging import getLogger
 from typing import Union, List
@@ -392,6 +393,151 @@ class RFDETR:
         )
         shutil.rmtree(tmp_out_dir)
 
+    @classmethod
+    def download_from_roboflow(cls, workspace: str, project_id: str, version: str, api_key: str = None, local_weights_path: str = None):
+        """
+        Download trained model weights from Roboflow and create a local RF-DETR model instance.
+        
+        This method allows you to download weights from a model you trained on Roboflow
+        and use them locally for inference on your own hardware.
+        
+        Args:
+            workspace (str): The name of the Roboflow workspace where your model is stored.
+            project_id (str): The ID of the project containing your trained model.
+            version (str): The version number of your trained model.
+            api_key (str, optional): Your Roboflow API key. If not provided,
+                it will be read from the environment variable `ROBOFLOW_API_KEY`.
+            local_weights_path (str, optional): Local path to save the downloaded weights.
+                If not provided, weights will be saved to ./roboflow_weights_{project_id}_v{version}.pt
+                
+        Returns:
+            RFDETR: An RF-DETR model instance with the downloaded weights loaded.
+            
+        Raises:
+            ValueError: If the `api_key` is not provided and not found in the environment
+                variable `ROBOFLOW_API_KEY`.
+            FileNotFoundError: If the weights cannot be downloaded from Roboflow.
+            
+        Example:
+            ```python
+            from rfdetr import RFDETRBase
+            
+            # Download your colonoscopy model trained on Roboflow
+            model = RFDETRBase.download_from_roboflow(
+                workspace="your-workspace",
+                project_id="colonoscopy-detection",
+                version="1",
+                api_key="your_api_key"  # or set ROBOFLOW_API_KEY env var
+            )
+            
+            # Now use the model for inference on your local videos
+            detections = model.predict("path/to/colonoscopy_video_frame.jpg")
+            ```
+        """
+        from roboflow import Roboflow
+        import tempfile
+        import requests
+        
+        # Get API key
+        if api_key is None:
+            api_key = os.getenv("ROBOFLOW_API_KEY")
+            if api_key is None:
+                raise ValueError("Set api_key=<KEY> in download_from_roboflow or export ROBOFLOW_API_KEY=<KEY>")
+        
+        # Set default weights path if not provided
+        if local_weights_path is None:
+            local_weights_path = f"./roboflow_weights_{project_id}_v{version}.pt"
+        
+        print(f"Downloading weights from Roboflow project {project_id} version {version}...")
+        
+        try:
+            # Initialize Roboflow client
+            rf = Roboflow(api_key=api_key)
+            workspace_obj = rf.workspace(workspace)
+            project = workspace_obj.project(project_id)
+            version_obj = project.version(version)
+            
+            # Try to get the model weights via the Roboflow API
+            # Method 1: Try to download the model directly
+            try:
+                # Some versions of Roboflow SDK support model.download()
+                model_info = version_obj.model()
+                if hasattr(model_info, 'download_weights'):
+                    weights_file = model_info.download_weights(local_weights_path)
+                elif hasattr(model_info, 'download'):
+                    weights_file = model_info.download(local_weights_path)
+                else:
+                    raise AttributeError("No download method found")
+                    
+            except (AttributeError, Exception) as e:
+                print(f"Direct download method not available ({e}), trying API approach...")
+                
+                # Method 2: Use REST API to get model weights URL
+                base_url = "https://api.roboflow.com"
+                headers = {"Authorization": f"Bearer {api_key}"}
+                
+                # Get model information
+                model_url = f"{base_url}/{workspace}/{project_id}/{version}/model"
+                response = requests.get(model_url, headers=headers)
+                
+                if response.status_code != 200:
+                    raise Exception(f"Failed to get model info: {response.status_code} - {response.text}")
+                
+                model_data = response.json()
+                
+                # Look for weights download URL in the response
+                weights_url = None
+                if 'weights' in model_data:
+                    weights_url = model_data['weights'].get('url') or model_data['weights'].get('download_url')
+                elif 'model' in model_data:
+                    weights_url = model_data['model'].get('weights_url') or model_data['model'].get('download_url')
+                
+                if not weights_url:
+                    # Method 3: Try to construct the weights URL based on common patterns
+                    weights_url = f"{base_url}/{workspace}/{project_id}/{version}/weights"
+                
+                # Download the weights file
+                print(f"Downloading weights from: {weights_url}")
+                weights_response = requests.get(weights_url, headers=headers, stream=True)
+                
+                if weights_response.status_code != 200:
+                    raise Exception(f"Failed to download weights: {weights_response.status_code} - {weights_response.text}")
+                
+                # Save weights to local file
+                with open(local_weights_path, 'wb') as f:
+                    for chunk in weights_response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                print(f"Weights downloaded and saved to: {local_weights_path}")
+        
+        except Exception as e:
+            # Provide helpful error message with instructions
+            error_msg = (
+                f"Failed to download weights from Roboflow: {str(e)}\n\n"
+                f"Please verify:\n"
+                f"1. Your workspace '{workspace}' exists and you have access\n"
+                f"2. Project ID '{project_id}' is correct\n"
+                f"3. Version '{version}' exists and has a trained RF-DETR model\n"
+                f"4. Your API key is valid and has access to this project\n"
+                f"5. The model was trained with RF-DETR (not another model type)\n\n"
+                f"Alternative: You can manually download weights from the Roboflow dashboard:\n"
+                f"1. Go to your project in Roboflow\n"
+                f"2. Navigate to the 'Models' tab\n"
+                f"3. Find your RF-DETR model and download the weights file\n"
+                f"4. Use RFDETRBase(pretrain_weights='path/to/downloaded/weights.pt')\n"
+            )
+            raise FileNotFoundError(error_msg)
+        
+        # Create model instance with downloaded weights
+        try:
+            model_instance = cls(pretrain_weights=local_weights_path)
+            print(f"Successfully loaded RF-DETR model with weights from Roboflow!")
+            return model_instance
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load model with downloaded weights: {str(e)}. "
+                f"The downloaded weights file may be corrupted or incompatible."
+            )
 
 
 class RFDETRBase(RFDETR):

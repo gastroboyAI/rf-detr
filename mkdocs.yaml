@@ -26,6 +26,7 @@ nav:
      - Run a Pre-Trained Model: learn/pretrained.md
      - Train an RF-DETR Model: learn/train.md
      - Deploy a Trained Model: learn/deploy.md
+     - Download from Roboflow: learn/download-from-roboflow.md
      - Benchmarks: learn/benchmarks.md
   - Reference:
       - RF-DETR: reference/rfdetr.md
